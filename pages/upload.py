@@ -51,20 +51,37 @@ st.markdown(
         .upload-hero h1 { margin: 0; font-size: 1.9rem; font-weight: 800; }
         .upload-hero p  { margin: 0.4rem 0 0; opacity: .75; font-size: 0.95rem; }
 
-        /* Drop zone */
-        .drop-zone {
+        /* Native file-uploader styled as drop zone */
+        [data-testid="stFileUploader"] {
             border: 2.5px dashed #013494;
             border-radius: 20px;
-            padding: 2.5rem 2rem;
-            text-align: center;
             background: linear-gradient(135deg, #f0f7ff 0%, #e8f0fe 100%);
-            color: #013494;
-            font-weight: 600;
-            font-size: 1.05rem;
+            padding: 1rem 1.5rem;
             margin-bottom: 1rem;
         }
-        .drop-zone .drop-icon { font-size: 2.8rem; display: block; margin-bottom: 0.5rem; }
-        .drop-zone .drop-hint { font-size: 0.82rem; font-weight: 400; opacity: 0.65; margin-top: 0.35rem; }
+        [data-testid="stFileUploader"]:hover {
+            border-color: #0252cc;
+            background: linear-gradient(135deg, #e8f0fe 0%, #dde8fc 100%);
+        }
+        [data-testid="stFileUploaderDropzone"] {
+            background: transparent !important;
+            border: none !important;
+            padding: 1.2rem 1rem !important;
+        }
+        [data-testid="stFileUploaderDropzoneInstructions"] {
+            color: #013494 !important;
+            font-weight: 600 !important;
+            font-size: 1.05rem !important;
+        }
+        [data-testid="stFileUploaderDropzoneInstructions"] span {
+            color: #013494 !important;
+        }
+        [data-testid="stFileUploaderDropzoneInstructions"] small {
+            font-size: 0.82rem !important;
+            font-weight: 400 !important;
+            opacity: 0.65 !important;
+            color: #013494 !important;
+        }
 
         /* Schema badge pill */
         .schema-pill {
@@ -207,22 +224,12 @@ def _kpi_box(icon, value, label):
 section_header("☁️ Upload CSV", "Drop your work-order export here")
 divider()
 
-st.markdown(
-    """
-    <div class="drop-zone">
-        <span class="drop-icon">📂</span>
-        Drag &amp; drop your <strong>work order CSV</strong> here, or click <em>Browse files</em> below.
-        <div class="drop-hint">Supported format: .csv &nbsp;·&nbsp; Max size: 200 MB</div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
 uploaded_file = st.file_uploader(
-    "Choose a CSV file",
+    "Drag & drop your work order CSV here, or click Browse files",
     type=["csv"],
     label_visibility="collapsed",
     key="wo_uploader",
+    help="Supported format: .csv · Max size: 200 MB",
 )
 
 

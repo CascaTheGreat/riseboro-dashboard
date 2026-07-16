@@ -29,6 +29,46 @@ PRIMARY   = "#013494"
 PRIMARY_L = "#0252cc"
 ACCENT    = "#1e88e5"
 
+BUILDING_CODES_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "building_codes.csv")
+
+# Columns to pull from building_codes into the enriched work-order df
+BC_KEEP_COLS = ["YARDI Property Code_2", "PLACE_NAME", "PROJECT_NAME", "ADDRESS", "Borough", "Housing_Type", "Status"]
+
+
+@st.cache_data(show_spinner=False)
+def _load_building_codes() -> pd.DataFrame:
+    """Load building_codes.csv and normalise the join key."""
+    bc = pd.read_csv(BUILDING_CODES_PATH, low_memory=False)
+    bc.columns = bc.columns.str.strip()
+    # Strip leading periods and whitespace from the YARDI code
+    bc["_yardi_key"] = (
+        bc["YARDI Property Code_2"]
+        .astype(str)
+        .str.strip()
+        .str.lstrip(".")
+        .str.lower()
+    )
+    return bc
+
+
+def _enrich_with_building_codes(df: pd.DataFrame, bc: pd.DataFrame) -> pd.DataFrame:
+    """Left-join building_codes onto df on Building → _yardi_key."""
+    df = df.copy()
+    df["_building_key"] = df["Building"].astype(str).str.strip().str.lower()
+
+    # Keep only unique code→metadata rows for the merge (avoid row explosion)
+    bc_unique = (
+        bc[["_yardi_key"] + [c for c in BC_KEEP_COLS if c in bc.columns]]
+        .drop_duplicates(subset=["_yardi_key"])
+    )
+    bc_unique = bc_unique.rename(columns={
+        c: f"bc_{c}" for c in bc_unique.columns if c != "_yardi_key"
+    })
+
+    enriched = df.merge(bc_unique, left_on="_building_key", right_on="_yardi_key", how="left")
+    enriched = enriched.drop(columns=["_building_key", "_yardi_key"], errors="ignore")
+    return enriched
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE STYLE
@@ -249,8 +289,13 @@ if uploaded_file is not None:
         st.error("Upload failed — please fix the errors above and re-upload.")
 
     else:
+        # Enrich with building codes
+        bc = _load_building_codes()
+        df = _enrich_with_building_codes(df, bc)
+
         st.session_state.wo_df       = df
         st.session_state.wo_filename = uploaded_file.name
+        st.session_state.bc_df       = bc
 
         st.markdown('<div class="val-ok">✅ File validated successfully — all required columns present.</div>', unsafe_allow_html=True)
         for w in non_fatal:
@@ -276,6 +321,58 @@ if uploaded_file is not None:
             _kpi_box("🏢", str(unique_bldg), "Buildings")
         with k4:
             _kpi_box("👷", str(unique_emp), "Employees")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── BUILDING MATCH REPORT ─────────────────────────────────────────────
+        if "Building" in df.columns:
+            section_header("🏗️ Building match report", "YARDI Property Code_2 lookup")
+            divider()
+
+            bc_col = "bc_YARDI Property Code_2"
+            matched_mask   = df[bc_col].notna() if bc_col in df.columns else pd.Series(False, index=df.index)
+            n_matched      = matched_mask.sum()
+            n_unmatched    = (~matched_mask).sum()
+            pct            = 100 * n_matched / len(df) if len(df) else 0
+
+            m1, m2, m3 = st.columns(3)
+            with m1:
+                _kpi_box("✅", f"{n_matched:,}", "Matched rows")
+            with m2:
+                _kpi_box("⚠️", f"{n_unmatched:,}", "Unmatched rows")
+            with m3:
+                _kpi_box("📊", f"{pct:.1f}%", "Match rate")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # Unmatched building codes
+            unmatched_codes = (
+                df.loc[~matched_mask, "Building"]
+                .dropna()
+                .value_counts()
+                .reset_index()
+            )
+            unmatched_codes.columns = ["Building (from work order)", "Row count"]
+
+            if not unmatched_codes.empty:
+                with st.expander(f"⚠️ {len(unmatched_codes)} unmatched building code(s) — click to review", expanded=False):
+                    st.dataframe(unmatched_codes, hide_index=True)
+
+            # Matched summary table
+            if bc_col in df.columns:
+                matched_summary = (
+                    df.loc[matched_mask]
+                    .groupby(["Building", bc_col,
+                              *(c for c in ["bc_PLACE_NAME", "bc_ADDRESS", "bc_Borough"] if c in df.columns)])
+                    .size()
+                    .reset_index(name="Row count")
+                    .sort_values("Row count", ascending=False)
+                )
+                matched_summary.columns = [
+                    c.replace("bc_", "") for c in matched_summary.columns
+                ]
+                with st.expander(f"✅ {n_matched:,} matched rows — click to review", expanded=False):
+                    st.dataframe(matched_summary, hide_index=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 

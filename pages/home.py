@@ -386,8 +386,9 @@ with col_r:
 
     # High volume unit tracking
     if "Prop-Unit" in raw_df.columns:
+        unit_raw = recent_raw[recent_raw["Prop-Unit"] != "Building"]
         unit_piv = (
-            recent_raw.groupby(["Building", "Prop-Unit", "issue_category"])
+            unit_raw.groupby(["Building", "Prop-Unit", "issue_category"])
             .size()
             .unstack(fill_value=0)
         )

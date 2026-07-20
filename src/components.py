@@ -12,14 +12,15 @@ def metric_card(
     value: str,
     delta: str = "",
     delta_positive: bool = True,
-    icon: str = "📊",
+    icon: str = "",
+    show_arrow: bool = True,
 ):
     """Render a styled KPI metric card."""
     delta_color = "#22c55e" if delta_positive else "#ef4444"
-    delta_arrow = "▲" if delta_positive else "▼"
+    delta_arrow = ("▲ " if delta_positive else "▼ ") if show_arrow else ""
     delta_html = (
         f'<span style="color:{delta_color}; font-size:0.85rem; font-weight:600;">'
-        f"{delta_arrow} {delta}</span>"
+        f"{delta_arrow}{delta}</span>"
         if delta
         else ""
     )

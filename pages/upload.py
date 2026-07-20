@@ -154,8 +154,9 @@ st.markdown(
             background: linear-gradient(180deg, #013494 0%, #0a2d6e 100%);
             color: white;
         }
-        section[data-testid="stSidebar"] * { color: white !important; }
+        section[data-testid="stSidebar"] * { color: white; }
         section[data-testid="stSidebar"] hr { border-color: rgba(255,255,255,0.2); }
+        section[data-testid="stSidebar"] .schema-pill {color: #013494;}
 
         /* Validation */
         .val-error { background:#fff1f2; border-left:4px solid #ef4444; border-radius:6px; padding:0.6rem 1rem; margin-bottom:0.5rem; font-size:0.88rem; color:#991b1b; }
@@ -170,7 +171,7 @@ st.markdown(
 # SIDEBAR
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## ⚙️ Upload Controls")
+    st.markdown("## ️ Upload Controls")
     st.markdown("---")
     st.markdown("**Expected schema**")
     pills_html = "".join(f'<span class="schema-pill">{c}</span>' for c in REQUIRED_COLUMNS)
@@ -179,9 +180,9 @@ with st.sidebar:
 
     if "wo_df" in st.session_state and st.session_state.wo_df is not None:
         df_cached = st.session_state.wo_df
-        st.success(f"✅ {len(df_cached):,} rows loaded")
+        st.success(f" {len(df_cached):,} rows loaded")
         st.markdown(f"**File:** `{st.session_state.get('wo_filename', 'unknown')}`")
-        if st.button("🗑️ Clear uploaded data", key="clear_data"):
+        if st.button("️ Clear uploaded data", key="clear_data"):
             st.session_state.wo_df       = None
             st.session_state.wo_filename = None
             st.rerun()
@@ -198,7 +199,7 @@ with st.sidebar:
 st.markdown(
     """
     <div class="upload-hero">
-        <h1>📂 Work Order Data Upload</h1>
+        <h1> Work Order Data Upload</h1>
         <p>Import your work-order CSV to populate the analytics dashboard with live data.</p>
     </div>
     """,
@@ -261,7 +262,7 @@ def _kpi_box(icon, value, label):
 # ─────────────────────────────────────────────────────────────────────────────
 # UPLOAD ZONE
 # ─────────────────────────────────────────────────────────────────────────────
-section_header("☁️ Upload CSV", "Drop your work-order export here")
+section_header("️ Upload CSV", "Drop your work-order export here")
 divider()
 
 uploaded_file = st.file_uploader(
@@ -285,7 +286,7 @@ if uploaded_file is not None:
 
     if fatal:
         for err in fatal:
-            st.markdown(f'<div class="val-error">⚠️ {err}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="val-error">️ {err}</div>', unsafe_allow_html=True)
         st.error("Upload failed — please fix the errors above and re-upload.")
 
     else:
@@ -297,14 +298,14 @@ if uploaded_file is not None:
         st.session_state.wo_filename = uploaded_file.name
         st.session_state.bc_df       = bc
 
-        st.markdown('<div class="val-ok">✅ File validated successfully — all required columns present.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="val-ok"> File validated successfully — all required columns present.</div>', unsafe_allow_html=True)
         for w in non_fatal:
             st.warning(w)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
         # KPI SUMMARY
-        section_header("📊 Quick Summary", f"Loaded from `{uploaded_file.name}`")
+        section_header(" Quick Summary", f"Loaded from `{uploaded_file.name}`")
         divider()
 
         total_rows  = len(df)
@@ -314,19 +315,19 @@ if uploaded_file is not None:
 
         k1, k2, k3, k4 = st.columns(4)
         with k1:
-            _kpi_box("📋", f"{total_rows:,}", "Work Orders")
+            _kpi_box("", f"{total_rows:,}", "Work Orders")
         with k2:
-            _kpi_box("💰", f"${total_spend:,.2f}", "Total Spend")
+            _kpi_box("", f"${total_spend:,.2f}", "Total Spend")
         with k3:
-            _kpi_box("🏢", str(unique_bldg), "Buildings")
+            _kpi_box("", str(unique_bldg), "Buildings")
         with k4:
-            _kpi_box("👷", str(unique_emp), "Employees")
+            _kpi_box("", str(unique_emp), "Employees")
 
         st.markdown("<br>", unsafe_allow_html=True)
 
         # ── BUILDING MATCH REPORT ─────────────────────────────────────────────
         if "Building" in df.columns:
-            section_header("🏗️ Building match report", "YARDI Property Code_2 lookup")
+            section_header("️ Building match report", "YARDI Property Code_2 lookup")
             divider()
 
             bc_col = "bc_YARDI Property Code_2"
@@ -337,11 +338,11 @@ if uploaded_file is not None:
 
             m1, m2, m3 = st.columns(3)
             with m1:
-                _kpi_box("✅", f"{n_matched:,}", "Matched rows")
+                _kpi_box("", f"{n_matched:,}", "Matched rows")
             with m2:
-                _kpi_box("⚠️", f"{n_unmatched:,}", "Unmatched rows")
+                _kpi_box("️", f"{n_unmatched:,}", "Unmatched rows")
             with m3:
-                _kpi_box("📊", f"{pct:.1f}%", "Match rate")
+                _kpi_box("", f"{pct:.1f}%", "Match rate")
 
             st.markdown("<br>", unsafe_allow_html=True)
 
@@ -355,7 +356,7 @@ if uploaded_file is not None:
             unmatched_codes.columns = ["Building (from work order)", "Row count"]
 
             if not unmatched_codes.empty:
-                with st.expander(f"⚠️ {len(unmatched_codes)} unmatched building code(s) — click to review", expanded=False):
+                with st.expander(f"️ {len(unmatched_codes)} unmatched building code(s) — click to review", expanded=False):
                     st.dataframe(unmatched_codes, hide_index=True)
 
             # Matched summary table
@@ -371,14 +372,14 @@ if uploaded_file is not None:
                 matched_summary.columns = [
                     c.replace("bc_", "") for c in matched_summary.columns
                 ]
-                with st.expander(f"✅ {n_matched:,} matched rows — click to review", expanded=False):
+                with st.expander(f" {n_matched:,} matched rows — click to review", expanded=False):
                     st.dataframe(matched_summary, hide_index=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
         # STATUS BREAKDOWN
         if "Status" in df.columns:
-            section_header("🔵 Status Breakdown")
+            section_header(" Status Breakdown")
             divider()
 
             status_counts = df["Status"].value_counts().reset_index()
@@ -392,7 +393,7 @@ if uploaded_file is not None:
             st.markdown("<br>", unsafe_allow_html=True)
 
         # DATA PREVIEW
-        section_header("📋 Data Preview")
+        section_header(" Data Preview")
         divider()
 
         search = st.text_input(
@@ -438,7 +439,7 @@ if uploaded_file is not None:
 
         # SPEND BY BUILDING
         if "Building" in df.columns and "Total" in df.columns:
-            section_header("🏢 Spend by Building")
+            section_header(" Spend by Building")
             divider()
 
             spend_by_bldg = (
@@ -472,7 +473,7 @@ else:
         st.info("Previously uploaded data is still available in session. Upload a new file above or clear it from the sidebar.")
     else:
         st.markdown("<br>", unsafe_allow_html=True)
-        section_header("📋 Expected Column Schema")
+        section_header(" Expected Column Schema")
         divider()
         st.markdown(
             "Your CSV must contain **exactly** the following columns "
@@ -493,7 +494,7 @@ else:
                     "John Smith", "Replace HVAC filter",
                     "2", "SKU-9981", "HVAC Filter 16x20", "$12.50", "$25.00",
                 ],
-                "Required": ["✅"] * len(REQUIRED_COLUMNS),
+                "Required": [""] * len(REQUIRED_COLUMNS),
             }
         )
         st.dataframe(

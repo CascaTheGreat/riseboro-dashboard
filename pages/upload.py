@@ -30,9 +30,36 @@ PRIMARY_L = "#0252cc"
 ACCENT    = "#1e88e5"
 
 BUILDING_CODES_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "building_codes.csv")
+RENOVATIONS_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "renovations.csv")
 
 # Columns to pull from building_codes into the enriched work-order df
-BC_KEEP_COLS = ["YARDI Property Code_2", "PLACE_NAME", "PROJECT_NAME", "ADDRESS", "Borough", "Housing_Type", "Status"]
+BC_KEEP_COLS = ["YARDI Property Code_2", "PLACE_NAME", "PROJECT_NAME", "ADDRESS", "Borough", "Housing_Type", "Status", "Most recent rehab"]
+
+
+def _normalize_address(addr) -> str:
+    """Normalize address for consistent matching (case, punctuation, common abbreviations)."""
+    if pd.isna(addr):
+        return ""
+    import re
+    s = str(addr).lower().strip()
+    s = re.sub(r'[^\w\s]', ' ', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    
+    replacements = {
+        r'\bstreet\b': 'st',
+        r'\bavenue\b': 'ave',
+        r'\bboulevard\b': 'blvd',
+        r'\broad\b': 'rd',
+        r'\bplace\b': 'pl',
+        r'\bcourt\b': 'ct',
+        r'\blane\b': 'ln',
+        r'\bny\b': 'new york',
+    }
+    for pattern, repl in replacements.items():
+        s = re.sub(pattern, repl, s)
+        
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
 
 
 @st.cache_data(show_spinner=False)
@@ -48,7 +75,27 @@ def _load_building_codes() -> pd.DataFrame:
         .str.lstrip(".")
         .str.lower()
     )
+    
+    # Load and merge renovations data on normalized address
+    if os.path.exists(RENOVATIONS_PATH):
+        ren = pd.read_csv(RENOVATIONS_PATH, low_memory=False)
+        ren.columns = ren.columns.str.strip()
+        
+        # Apply normalization to create matching keys
+        bc["_norm_addr"] = bc["ADDRESS"].apply(_normalize_address)
+        ren["_norm_addr"] = ren["ADDRESS"].apply(_normalize_address)
+        
+        # Select the column to merge (Most recent rehab) along with the join key
+        ren_merge = ren[["_norm_addr", "Most recent rehab"]].drop_duplicates(subset=["_norm_addr"])
+        
+        # Left-join renovations onto building_codes
+        bc = bc.merge(ren_merge, on="_norm_addr", how="left")
+        
+        # Drop temporary norm column
+        bc = bc.drop(columns=["_norm_addr"])
+        
     return bc
+
 
 
 def _enrich_with_building_codes(df: pd.DataFrame, bc: pd.DataFrame) -> pd.DataFrame:

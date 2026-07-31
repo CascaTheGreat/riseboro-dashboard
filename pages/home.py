@@ -9,21 +9,35 @@ Columns: WO, Prop-Unit, Building, Status, Call Date, Start Date,
 """
 
 import sys, os
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import streamlit as st
 import pandas as pd
+import numpy as np
+import pydeck as pdk
+
 
 from streamlit_echarts import st_echarts
 from src.components import metric_card, section_header, divider
 from src.helpers import classify_issue, get_season
 
 # ── Palette ──────────────────────────────────────────────────────────────────
-PRIMARY   = "#013494"
+PRIMARY = "#013494"
 PRIMARY_L = "#0252cc"
-ACCENT    = "#1e88e5"
-COLORS    = [PRIMARY, PRIMARY_L, ACCENT, "#42a5f5", "#90caf9", "#bbdefb",
-             "#e53935", "#fb8c00", "#43a047", "#8e24aa"]
+ACCENT = "#1e88e5"
+COLORS = [
+    PRIMARY,
+    PRIMARY_L,
+    ACCENT,
+    "#42a5f5",
+    "#90caf9",
+    "#bbdefb",
+    "#e53935",
+    "#fb8c00",
+    "#43a047",
+    "#8e24aa",
+]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE STYLE
@@ -93,10 +107,61 @@ has_data = raw_df is not None and len(raw_df) > 0
 
 if has_data:
     raw_df = raw_df.copy()
-    if "Brief Desc" in raw_df.columns and "issue_category" not in raw_df.columns:
-        raw_df["issue_category"] = raw_df["Brief Desc"].apply(classify_issue)
-    if "Call Date" in raw_df.columns and "season" not in raw_df.columns:
-        raw_df["season"] = raw_df["Call Date"].apply(get_season)
+    
+    # Rename columns to standard names case-insensitively
+    standard_renames = {}
+    for col in raw_df.columns:
+        col_lower = str(col).lower().strip()
+        if col_lower in ("wo", "wo #", "work order"):
+            standard_renames[col] = "WO"
+        elif col_lower in ("prop-unit", "prop unit", "unit"):
+            standard_renames[col] = "Prop-Unit"
+        elif col_lower in ("building", "bldg", "building code"):
+            standard_renames[col] = "Building"
+        elif col_lower in ("status", "state"):
+            standard_renames[col] = "Status"
+        elif col_lower in ("call date", "call_date", "date"):
+            standard_renames[col] = "Call Date"
+        elif col_lower in ("start date", "start_date"):
+            standard_renames[col] = "Start Date"
+        elif col_lower in ("employee", "emp"):
+            standard_renames[col] = "Employee"
+        elif col_lower in ("brief desc", "brief_desc", "description", "desc"):
+            standard_renames[col] = "Brief Desc"
+        elif col_lower in ("quantity", "qty"):
+            standard_renames[col] = "Quantity"
+        elif col_lower in ("stock", "sku"):
+            standard_renames[col] = "Stock"
+        elif col_lower in ("stock description", "stock_description"):
+            standard_renames[col] = "Stock Description"
+        elif col_lower in ("unit price", "unit_price", "price"):
+            standard_renames[col] = "Unit Price"
+        elif col_lower in ("total", "amount"):
+            standard_renames[col] = "Total"
+        elif col_lower in ("issue_category", "issue category", "subcategory", "subcat"):
+            standard_renames[col] = "issue_category"
+        elif col_lower in ("season", "seasons"):
+            standard_renames[col] = "season"
+            
+    if standard_renames:
+        raw_df = raw_df.rename(columns=standard_renames)
+        
+    # Populate issue_category if missing
+    if "issue_category" not in raw_df.columns:
+        if "Brief Desc" in raw_df.columns:
+            raw_df["issue_category"] = raw_df["Brief Desc"].apply(classify_issue)
+        else:
+            raw_df["issue_category"] = pd.NA
+            
+    # Populate season if missing
+    if "season" not in raw_df.columns:
+        if "Call Date" in raw_df.columns:
+            if not pd.api.types.is_datetime64_any_dtype(raw_df["Call Date"]):
+                raw_df["Call Date"] = pd.to_datetime(raw_df["Call Date"], errors="coerce")
+            raw_df["season"] = raw_df["Call Date"].apply(get_season)
+        else:
+            raw_df["season"] = pd.NA
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SIDEBAR
@@ -127,7 +192,11 @@ with st.sidebar:
 
         # Building filter
         st.markdown("** Filter by Building**")
-        buildings = sorted(raw_df["Building"].dropna().unique().tolist()) if "Building" in raw_df.columns else []
+        buildings = (
+            sorted(raw_df["Building"].dropna().unique().tolist())
+            if "Building" in raw_df.columns
+            else []
+        )
         selected_buildings = st.multiselect(
             "Select buildings",
             options=buildings,
@@ -140,7 +209,11 @@ with st.sidebar:
 
         # Status filter
         st.markdown("** Filter by Status**")
-        statuses = sorted(raw_df["Status"].dropna().unique().tolist()) if "Status" in raw_df.columns else []
+        statuses = (
+            sorted(raw_df["Status"].dropna().unique().tolist())
+            if "Status" in raw_df.columns
+            else []
+        )
         selected_statuses = st.multiselect(
             "Select statuses",
             options=statuses,
@@ -156,10 +229,13 @@ with st.sidebar:
             st.caption(f"Source: `{filename}`")
 
     else:
-        st.info("No data loaded. Go to **Upload Work Orders** to import your CSV.", icon="ℹ️")
-        date_range       = None
+        st.info(
+            "No data loaded. Go to **Upload Work Orders** to import your CSV.",
+            icon="ℹ️",
+        )
+        date_range = None
         selected_buildings = []
-        selected_statuses  = []
+        selected_statuses = []
 
     st.markdown("---")
     st.caption("Riseboro Predictive Analytics v1.0")
@@ -217,7 +293,10 @@ if selected_statuses and "Status" in df.columns:
     df = df[df["Status"].isin(selected_statuses)]
 
 # ── Critical Maintenance KPIs ────────────────────────────────────────────────
-section_header("️ Critical Maintenance KPIs", "Tracked categories: Leaks, Elevators, Heat, Hot Water, Roof")
+section_header(
+    "️ Critical Maintenance KPIs",
+    "Tracked categories: Leaks, Elevators, Heat, Hot Water, Roof",
+)
 divider()
 
 target_categories = ["Leaks", "Elevators", "Heat", "Hot Water", "Roof"]
@@ -232,8 +311,8 @@ else:
 
 # Filter raw_df for target categories and last 3 years
 recent_raw = raw_df[
-    raw_df["issue_category"].isin(target_categories) &
-    (raw_df["Call Date"] >= three_years_ago)
+    raw_df["issue_category"].isin(target_categories)
+    & (raw_df["Call Date"] >= three_years_ago)
 ]
 
 # Calculate high-volume counts for each category
@@ -257,7 +336,7 @@ with c1:
         f"{h_bldgs} high-vol bldgs" if h_bldgs > 0 else "0 high-vol bldgs",
         h_bldgs == 0,
         "",
-        show_arrow=False
+        show_arrow=False,
     )
 with c2:
     h_bldgs = category_high_vol_bldgs["Elevators"]
@@ -267,7 +346,7 @@ with c2:
         f"{h_bldgs} high-vol bldgs" if h_bldgs > 0 else "0 high-vol bldgs",
         h_bldgs == 0,
         "",
-        show_arrow=False
+        show_arrow=False,
     )
 with c3:
     h_bldgs = category_high_vol_bldgs["Heat"]
@@ -277,7 +356,7 @@ with c3:
         f"{h_bldgs} high-vol bldgs" if h_bldgs > 0 else "0 high-vol bldgs",
         h_bldgs == 0,
         "",
-        show_arrow=False
+        show_arrow=False,
     )
 with c4:
     h_bldgs = category_high_vol_bldgs["Hot Water"]
@@ -286,8 +365,8 @@ with c4:
         f"{filtered_counts['Hot Water']:,}",
         f"{h_bldgs} high-vol bldgs" if h_bldgs > 0 else "0 high-vol bldgs",
         h_bldgs == 0,
-        "️",
-        show_arrow=False
+        "",
+        show_arrow=False,
     )
 with c5:
     h_bldgs = category_high_vol_bldgs["Roof"]
@@ -297,20 +376,54 @@ with c5:
         f"{h_bldgs} high-vol bldgs" if h_bldgs > 0 else "0 high-vol bldgs",
         h_bldgs == 0,
         "",
-        show_arrow=False
+        show_arrow=False,
     )
+st.markdown("<br>", unsafe_allow_html=True)
 
+maps_df = pd.DataFrame(
+    np.random.randn(100, 2) / [50, 50] + [40.69, -73.92], columns=["lat", "lon"]
+)
+st.pydeck_chart(
+    pdk.Deck(
+        map_style=None,
+        initial_view_state=pdk.ViewState(
+            latitude=40.69,
+            longitude=-73.92,
+            zoom=11,
+            pitch=50,
+        ),
+        layers=[
+            pdk.Layer(
+                "HexagonLayer",
+                data=maps_df,
+                get_position="[lon, lat]",
+                radius=200,
+                elevation_scale=5,
+                elevation_range=[0, 1000],
+                pickable=True,
+                extruded=True,
+            ),
+        ],
+        tooltip=True,
+    )
+)
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── High-Volume Tracking & Seasonal Trends ───────────────────────────────────
-section_header(" High-Volume Tracking & Seasonal Trends", "Analysis of critical issues over time and across the portfolio")
+section_header(
+    " High-Volume Tracking & Seasonal Trends",
+    "Analysis of critical issues over time and across the portfolio",
+)
 divider()
 
 col_l, col_r = st.columns([4, 5])
 
 # Left column: Seasonal Breakdown
 with col_l:
-    st.markdown('<div class="chart-card"><div class="chart-card-title">️ Seasonal Breakdown of Issues (Filtered Data)</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="chart-card"><div class="chart-card-title">️ Seasonal Breakdown of Issues (Filtered Data)</div>',
+        unsafe_allow_html=True,
+    )
     seasonal_df = df[df["issue_category"].isin(target_categories)]
     if not seasonal_df.empty and "season" in seasonal_df.columns:
         seasonal_pivot = (
@@ -323,66 +436,103 @@ with col_l:
         for cat in target_categories:
             if cat not in seasonal_pivot.columns:
                 seasonal_pivot[cat] = 0
-        
+
         colors_mapping = {
-            "Leaks": "#1e88e5",      # Light Blue
+            "Leaks": "#1e88e5",  # Light Blue
             "Elevators": "#8e24aa",  # Purple
-            "Heat": "#e53935",       # Red
+            "Heat": "#e53935",  # Red
             "Hot Water": "#fb8c00",  # Orange
-            "Roof": "#43a047",       # Green
+            "Roof": "#43a047",  # Green
         }
-        
+
         seasonal_series = []
         for cat in target_categories:
-            seasonal_series.append({
-                "name": cat,
-                "type": "bar",
-                "stack": "total",
-                "data": seasonal_pivot[cat].tolist(),
-                "itemStyle": {"borderRadius": [4, 4, 0, 0]},
-            })
-            
+            seasonal_series.append(
+                {
+                    "name": cat,
+                    "type": "bar",
+                    "stack": "total",
+                    "data": seasonal_pivot[cat].tolist(),
+                    "itemStyle": {"borderRadius": [4, 4, 0, 0]},
+                }
+            )
+
         seasonal_opts = {
             "color": [colors_mapping[cat] for cat in target_categories],
             "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
             "legend": {"data": target_categories, "bottom": 0},
-            "grid": {"left": "3%", "right": "4%", "bottom": "12%", "containLabel": True},
+            "grid": {
+                "left": "3%",
+                "right": "4%",
+                "bottom": "12%",
+                "containLabel": True,
+            },
             "xAxis": {"type": "category", "data": seasons_order},
             "yAxis": {"type": "value", "name": "Reports"},
             "series": seasonal_series,
         }
-        st_echarts(options=seasonal_opts, height="380px", key="seasonal_breakdown_chart")
+        st_echarts(
+            options=seasonal_opts, height="380px", key="seasonal_breakdown_chart"
+        )
     else:
         st.info("No seasonal data available. Verify Call Date contains valid dates.")
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # Right column: High-Volume Portfolio Tracking
 with col_r:
-    st.markdown('<div class="chart-card"><div class="chart-card-title"> High-Volume Issue Tracking (Last 3 Years)</div>', unsafe_allow_html=True)
-    
+    st.markdown(
+        '<div class="chart-card"><div class="chart-card-title"> High-Volume Issue Tracking (Last 3 Years)</div>',
+        unsafe_allow_html=True,
+    )
+
     # High volume building tracking (>3 reports in last 3 years)
     bldg_piv = (
-        recent_raw.groupby(["Building", "issue_category"])
-        .size()
-        .unstack(fill_value=0)
+        recent_raw.groupby(["Building", "issue_category"]).size().unstack(fill_value=0)
     )
     for cat in target_categories:
         if cat not in bldg_piv.columns:
             bldg_piv[cat] = 0
     bldg_piv = bldg_piv[target_categories]
     bldg_piv["Total Target Reports"] = bldg_piv.sum(axis=1)
-    high_vol_bldgs = bldg_piv[bldg_piv["Total Target Reports"] > 3].sort_values(
-        "Total Target Reports", ascending=False
-    ).reset_index()
+    high_vol_bldgs = (
+        bldg_piv[bldg_piv["Total Target Reports"] > 3]
+        .sort_values("Total Target Reports", ascending=False)
+        .reset_index()
+    )
 
-    bldg_info = raw_df[[
-        "Building", "bc_ADDRESS", "bc_Borough", "bc_PROJECT_NAME"
-    ]].drop_duplicates(subset=["Building"])
-    
+    bldg_cols = ["Building", "bc_ADDRESS", "bc_Borough", "bc_PROJECT_NAME"]
+    if "bc_Most recent rehab" in raw_df.columns:
+        bldg_cols.append("bc_Most recent rehab")
+
+    bldg_info = raw_df[bldg_cols].drop_duplicates(subset=["Building"])
+
     high_vol_bldgs = high_vol_bldgs.merge(bldg_info, on="Building", how="left")
-    high_vol_bldgs["bc_ADDRESS"] = high_vol_bldgs["bc_ADDRESS"].fillna("Unknown Address")
-    high_vol_bldgs["bc_Borough"] = high_vol_bldgs["bc_Borough"].fillna("Unknown Borough")
-    high_vol_bldgs["bc_PROJECT_NAME"] = high_vol_bldgs["bc_PROJECT_NAME"].fillna("Unknown Project")
+    high_vol_bldgs["bc_ADDRESS"] = high_vol_bldgs["bc_ADDRESS"].fillna(
+        "Unknown Address"
+    )
+    high_vol_bldgs["bc_Borough"] = high_vol_bldgs["bc_Borough"].fillna(
+        "Unknown Borough"
+    )
+    high_vol_bldgs["bc_PROJECT_NAME"] = high_vol_bldgs["bc_PROJECT_NAME"].fillna(
+        "Unknown Project"
+    )
+
+    def format_rehab(val):
+        if pd.isna(val):
+            return "N/A"
+        s = str(val).strip()
+        if not s or s.lower() in ("nan", "n/a", "none", "<na>"):
+            return "N/A"
+        if s.endswith(".0"):
+            s = s[:-2]
+        return s
+
+    if "bc_Most recent rehab" in high_vol_bldgs.columns:
+        high_vol_bldgs["bc_Most recent rehab"] = high_vol_bldgs[
+            "bc_Most recent rehab"
+        ].apply(format_rehab)
+    else:
+        high_vol_bldgs["bc_Most recent rehab"] = "N/A"
 
     # High volume unit tracking
     if "Prop-Unit" in raw_df.columns:
@@ -397,79 +547,142 @@ with col_r:
                 unit_piv[cat] = 0
         unit_piv = unit_piv[target_categories]
         unit_piv["Total Target Reports"] = unit_piv.sum(axis=1)
-        high_vol_units = unit_piv[unit_piv["Total Target Reports"] > 3].sort_values(
-            "Total Target Reports", ascending=False
-        ).reset_index()
+        high_vol_units = (
+            unit_piv[unit_piv["Total Target Reports"] > 3]
+            .sort_values("Total Target Reports", ascending=False)
+            .reset_index()
+        )
         high_vol_units = high_vol_units.merge(bldg_info, on="Building", how="left")
-        high_vol_units["bc_ADDRESS"] = high_vol_units["bc_ADDRESS"].fillna("Unknown Address")
-        high_vol_units["bc_Borough"] = high_vol_units["bc_Borough"].fillna("Unknown Borough")
-        high_vol_units["bc_PROJECT_NAME"] = high_vol_units["bc_PROJECT_NAME"].fillna("Unknown Project")
+        high_vol_units["bc_ADDRESS"] = high_vol_units["bc_ADDRESS"].fillna(
+            "Unknown Address"
+        )
+        high_vol_units["bc_Borough"] = high_vol_units["bc_Borough"].fillna(
+            "Unknown Borough"
+        )
+        high_vol_units["bc_PROJECT_NAME"] = high_vol_units["bc_PROJECT_NAME"].fillna(
+            "Unknown Project"
+        )
     else:
         high_vol_units = pd.DataFrame()
 
     tab_bldg, tab_unit = st.tabs([" High-Vol Buildings", " High-Vol Units"])
-    
+
     with tab_bldg:
-        st.caption("Buildings with >3 target reports (Leaks, Elevators, Heat, Hot Water, Roof) in the last 3 years.")
+        st.caption(
+            "Buildings with >3 target reports (Leaks, Elevators, Heat, Hot Water, Roof) in the last 3 years."
+        )
         if not high_vol_bldgs.empty:
-            bldgs_display = high_vol_bldgs[[
-                "Building", "bc_PROJECT_NAME", "bc_ADDRESS", 
-                "Leaks", "Elevators", "Heat", "Hot Water", "Roof", "Total Target Reports"
-            ]].copy()
+            bldgs_display = high_vol_bldgs[
+                [
+                    "Building",
+                    "bc_PROJECT_NAME",
+                    "bc_ADDRESS",
+                    "bc_Most recent rehab",
+                    "Leaks",
+                    "Elevators",
+                    "Heat",
+                    "Hot Water",
+                    "Roof",
+                    "Total Target Reports",
+                ]
+            ].copy()
             bldgs_display.columns = [
-                "Building Code", "Project Name", "Address", 
-                "Leaks", "Elevators", "Heat", "Hot Water", "Roof", "Total"
+                "Building Code",
+                "Project Name",
+                "Address",
+                "Most Recent Rehab",
+                "Leaks",
+                "Elevators",
+                "Heat",
+                "Hot Water",
+                "Roof",
+                "Total",
             ]
             st.dataframe(
                 bldgs_display,
                 column_config={
-                    "Building Code": st.column_config.TextColumn("Building", pinned=True),
+                    "Building Code": st.column_config.TextColumn(
+                        "Building", pinned=True
+                    ),
                     "Project Name": st.column_config.TextColumn("Project"),
                     "Address": st.column_config.TextColumn("Address"),
+                    "Most Recent Rehab": st.column_config.TextColumn(
+                        "Most Recent Rehab"
+                    ),
                     "Leaks": st.column_config.NumberColumn("Leaks", format="%d"),
-                    "Elevators": st.column_config.NumberColumn("Elevators", format="%d"),
+                    "Elevators": st.column_config.NumberColumn(
+                        "Elevators", format="%d"
+                    ),
                     "Heat": st.column_config.NumberColumn("Heat", format="%d"),
-                    "Hot Water": st.column_config.NumberColumn("Hot Water", format="%d"),
+                    "Hot Water": st.column_config.NumberColumn(
+                        "Hot Water", format="%d"
+                    ),
                     "Roof": st.column_config.NumberColumn("Roof", format="%d"),
                     "Total": st.column_config.NumberColumn("Total", format="%d"),
                 },
                 hide_index=True,
-                height=300
+                height=300,
             )
         else:
-            st.success("No buildings identified with more than 3 target reports in the last 3 years.")
-            
+            st.success(
+                "No buildings identified with more than 3 target reports in the last 3 years."
+            )
+
     with tab_unit:
         st.caption("Individual units with >3 target reports in the last 3 years.")
         if not high_vol_units.empty:
-            units_display = high_vol_units[[
-                "Building", "Prop-Unit", "bc_PROJECT_NAME",
-                "Leaks", "Elevators", "Heat", "Hot Water", "Roof", "Total Target Reports"
-            ]].copy()
+            units_display = high_vol_units[
+                [
+                    "Building",
+                    "Prop-Unit",
+                    "bc_PROJECT_NAME",
+                    "Leaks",
+                    "Elevators",
+                    "Heat",
+                    "Hot Water",
+                    "Roof",
+                    "Total Target Reports",
+                ]
+            ].copy()
             units_display.columns = [
-                "Building Code", "Unit", "Project Name",
-                "Leaks", "Elevators", "Heat", "Hot Water", "Roof", "Total"
+                "Building Code",
+                "Unit",
+                "Project Name",
+                "Leaks",
+                "Elevators",
+                "Heat",
+                "Hot Water",
+                "Roof",
+                "Total",
             ]
             st.dataframe(
                 units_display,
                 column_config={
-                    "Building Code": st.column_config.TextColumn("Building", pinned=True),
+                    "Building Code": st.column_config.TextColumn(
+                        "Building", pinned=True
+                    ),
                     "Unit": st.column_config.TextColumn("Unit", pinned=True),
                     "Project Name": st.column_config.TextColumn("Project"),
                     "Leaks": st.column_config.NumberColumn("Leaks", format="%d"),
-                    "Elevators": st.column_config.NumberColumn("Elevators", format="%d"),
+                    "Elevators": st.column_config.NumberColumn(
+                        "Elevators", format="%d"
+                    ),
                     "Heat": st.column_config.NumberColumn("Heat", format="%d"),
-                    "Hot Water": st.column_config.NumberColumn("Hot Water", format="%d"),
+                    "Hot Water": st.column_config.NumberColumn(
+                        "Hot Water", format="%d"
+                    ),
                     "Roof": st.column_config.NumberColumn("Roof", format="%d"),
                     "Total": st.column_config.NumberColumn("Total", format="%d"),
                 },
                 hide_index=True,
-                height=300
+                height=300,
             )
         else:
-            st.success("No individual units identified with more than 3 target reports in the last 3 years.")
-            
-    st.markdown('</div>', unsafe_allow_html=True)
+            st.success(
+                "No individual units identified with more than 3 target reports in the last 3 years."
+            )
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -484,7 +697,10 @@ col_l, col_r = st.columns([3, 2])
 
 # ── Work Orders by Month ──────────────────────────────────────────────────────
 with col_l:
-    st.markdown('<div class="chart-card"><div class="chart-card-title"> Work Orders by Month (Call Date)</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="chart-card"><div class="chart-card-title"> Work Orders by Month (Call Date)</div>',
+        unsafe_allow_html=True,
+    )
 
     if "Call Date" in df.columns and df["Call Date"].notna().any():
         monthly = (
@@ -499,17 +715,27 @@ with col_l:
         vol_opts = {
             "color": [PRIMARY],
             "tooltip": {"trigger": "axis"},
-            "grid": {"left": "3%", "right": "4%", "bottom": "10%", "containLabel": True},
-            "xAxis": {"type": "category", "data": monthly["month"].tolist(),
-                      "axisLabel": {"rotate": 30}},
+            "grid": {
+                "left": "3%",
+                "right": "4%",
+                "bottom": "10%",
+                "containLabel": True,
+            },
+            "xAxis": {
+                "type": "category",
+                "data": monthly["month"].tolist(),
+                "axisLabel": {"rotate": 30},
+            },
             "yAxis": {"type": "value", "name": "Work Orders"},
-            "series": [{
-                "name": "WOs",
-                "type": "bar",
-                "data": monthly["count"].tolist(),
-                "itemStyle": {"borderRadius": [4, 4, 0, 0], "color": PRIMARY},
-                "emphasis": {"itemStyle": {"color": PRIMARY_L}},
-            }],
+            "series": [
+                {
+                    "name": "WOs",
+                    "type": "bar",
+                    "data": monthly["count"].tolist(),
+                    "itemStyle": {"borderRadius": [4, 4, 0, 0], "color": PRIMARY},
+                    "emphasis": {"itemStyle": {"color": PRIMARY_L}},
+                }
+            ],
         }
         st_echarts(options=vol_opts, height="350px", key="monthly_vol")
     else:
@@ -519,7 +745,10 @@ with col_l:
 
 # ── Status Donut ──────────────────────────────────────────────────────────────
 with col_r:
-    st.markdown('<div class="chart-card"><div class="chart-card-title"> Status Distribution</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="chart-card"><div class="chart-card-title"> Status Distribution</div>',
+        unsafe_allow_html=True,
+    )
 
     if "Status" in df.columns:
         status_counts = df["Status"].value_counts().reset_index()
@@ -530,17 +759,25 @@ with col_r:
             "color": COLORS,
             "tooltip": {"trigger": "item", "formatter": "{b}: {c} ({d}%)"},
             "legend": {"orient": "vertical", "left": "left", "top": "middle"},
-            "series": [{
-                "name": "Status",
-                "type": "pie",
-                "radius": ["42%", "70%"],
-                "avoidLabelOverlap": False,
-                "itemStyle": {"borderRadius": 8, "borderColor": "#fff", "borderWidth": 2},
-                "label": {"show": False, "position": "center"},
-                "emphasis": {"label": {"show": True, "fontSize": 18, "fontWeight": "bold"}},
-                "labelLine": {"show": False},
-                "data": pie_data,
-            }],
+            "series": [
+                {
+                    "name": "Status",
+                    "type": "pie",
+                    "radius": ["42%", "70%"],
+                    "avoidLabelOverlap": False,
+                    "itemStyle": {
+                        "borderRadius": 8,
+                        "borderColor": "#fff",
+                        "borderWidth": 2,
+                    },
+                    "label": {"show": False, "position": "center"},
+                    "emphasis": {
+                        "label": {"show": True, "fontSize": 18, "fontWeight": "bold"}
+                    },
+                    "labelLine": {"show": False},
+                    "data": pie_data,
+                }
+            ],
         }
         st_echarts(options=status_opts, height="350px", key="status_donut")
     else:

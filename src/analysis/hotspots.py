@@ -14,7 +14,7 @@ import pandas as pd
 NON_APARTMENT_CODES = ["wb203k", "rheing", "gtsplaza"]
 
 # Common areas and non-residential spaces, matched case-insensitively.
-NON_APARTMENT_PATTERN = "COMM|COMMERCIAL|BOILER|COMMON|OFFICE|SUPER|EXTERIOR"
+NON_APARTMENT_PATTERN = "COMM|COMMERCIAL|BOILER|COMMON|OFFICE|SUPER|EXTERIOR|BUILDING|^BLDG$"
 
 # Categories profiled when comparing hotspot groups against the portfolio.
 PROFILE_CATEGORIES = [

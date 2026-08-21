@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import pandas as pd
 
-from config import MONTH_MAP, MONTH_NAMES
+try:
+    from src.config import MONTH_MAP, MONTH_NAMES
+except ImportError:
+    from config import MONTH_MAP, MONTH_NAMES
 
 
 def filter_property(df: pd.DataFrame, prop_code: str) -> pd.DataFrame:

@@ -21,13 +21,19 @@ from streamlit_echarts import st_echarts
 
 from src.components import divider, metric_card, section_header
 from src.financials import (
+    calculate_hpd_fee_kpis,
     calculate_maintenance_drag,
     calculate_portfolio_kpis,
     clean_currency,
+    get_annual_fee_trend,
     get_bedroom_rent_summary,
+    get_building_fee_summary,
+    get_fee_source_distribution,
+    get_fee_type_distribution,
     get_property_revenue_summary,
     get_rent_tier_distribution,
     load_building_financials,
+    load_portfolio_hpd_charges,
     load_renovations,
     load_units_rents,
 )
@@ -106,6 +112,7 @@ st.markdown(
 units_df = load_units_rents()
 building_df = load_building_financials()
 renovations_df = load_renovations()
+hpd_charges_df = load_portfolio_hpd_charges(renovations_df)
 wo_df = st.session_state.get("wo_df", None)
 
 if units_df.empty:
@@ -160,6 +167,7 @@ with st.sidebar:
     st.markdown("###  Dataset Status")
     st.caption(f"• **Units in Rent Roll:** {len(units_df):,}")
     st.caption(f"• **Development Projects:** {building_df['PROJECT_NAME'].nunique():,}")
+    st.caption(f"• **HPD Municipal Charges:** {len(hpd_charges_df):,} records")
     if wo_df is not None and not wo_df.empty:
         st.caption(f"• **Uploaded Work Orders:** {len(wo_df):,} rows")
     else:
@@ -189,6 +197,18 @@ if selected_props:
         filtered_building["PROJECT_NAME"].isin(selected_props) |
         filtered_building["PLACE_NAME"].isin(selected_props)
     ]
+
+# Filter HPD Charges DF accordingly
+filtered_charges = hpd_charges_df.copy()
+if not filtered_charges.empty:
+    if selected_boroughs:
+        filtered_charges = filtered_charges[filtered_charges["Display_Borough"].isin(selected_boroughs)]
+    if selected_props:
+        filtered_charges = filtered_charges[
+            filtered_charges["Display_Property"].isin(selected_props)
+            | filtered_charges["PROJECT_NAME"].isin(selected_props)
+            | filtered_charges["Matched_Address"].isin(selected_props)
+        ]
 
 # ── Hero Banner ──────────────────────────────────────────────────────────────
 st.markdown(
@@ -247,11 +267,12 @@ with col4:
 st.markdown("<div style='margin-bottom: 1.5rem;'></div>", unsafe_allow_html=True)
 
 # ── Main Tabs Navigation ─────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     " Rent Roll & Revenue",
     " Capital & Development",
     " Maintenance OpEx & Drag",
     " Commercial & Vintage",
+    "🏛️ HPD Charges & Municipal Fees",
 ])
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -882,3 +903,427 @@ with tab4:
         }
         st_echarts(rehab_options, height="280px")
         st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TAB 5: HPD MUNICIPAL FEE CHARGES & COMPLIANCE
+# ═════════════════════════════════════════════════════════════════════════════
+with tab5:
+    section_header(
+        "HPD Municipal Fee Charges & Compliance",
+        "Track building-level municipal inspection fees, heat/hot water charges, and Department of Finance tax transfers.",
+    )
+
+    fee_kpis = calculate_hpd_fee_kpis(filtered_charges, filtered_building)
+
+    # ── KPI Cards ────────────────────────────────────────────────────────
+    col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+    with col_f1:
+        metric_card(
+            label="Total HPD Charges Assessed",
+            value=f"{fee_kpis['total_charges']:,}",
+            delta=f"${fee_kpis['total_fee_amount']:,.0f} Est. Total Liability",
+            delta_positive=True,
+            show_arrow=False,
+        )
+    with col_f2:
+        affected_pct = (
+            (fee_kpis["affected_properties"] / max(filtered_building["PROJECT_NAME"].nunique(), 1)) * 100.0
+            if not filtered_building.empty else 0.0
+        )
+        metric_card(
+            label="Properties with Assessed Fees",
+            value=f"{fee_kpis['affected_properties']}",
+            delta=f"{affected_pct:.1f}% of Filtered Portfolio",
+            delta_positive=True,
+            show_arrow=False,
+        )
+    with col_f3:
+        metric_card(
+            label="Transferred to DOF (Tax Liens)",
+            value=f"{fee_kpis['dof_transferred_count']:,}",
+            delta=f"{fee_kpis['dof_transfer_pct']:.1f}% Transferred to Property Tax",
+            delta_positive=(fee_kpis["dof_transferred_count"] == 0),
+            show_arrow=False,
+        )
+    with col_f4:
+        metric_card(
+            label="Primary Infraction Category",
+            value=f"{fee_kpis['top_fee_type']}",
+            delta=f"Latest Assessed: {fee_kpis['latest_fee_date']}",
+            delta_positive=True,
+            show_arrow=False,
+        )
+
+    st.markdown("<div style='margin-bottom: 1.25rem;'></div>", unsafe_allow_html=True)
+
+    if filtered_charges.empty:
+        st.info("No municipal fee charge records found for the selected filter criteria.")
+    else:
+
+        # ── Visualizations Row 1: Top Buildings & Fee Composition ────────────
+        b_summary = get_building_fee_summary(filtered_charges)
+        fee_dist = get_fee_type_distribution(filtered_charges)
+
+        c_top_b, c_pie_fee = st.columns([1.4, 1])
+
+        with c_top_b:
+            st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+            st.markdown('<div class="chart-card-title"> Top Properties by Assessed Fee Charges</div>', unsafe_allow_html=True)
+
+            top_10_fee_bldgs = b_summary.head(10).iloc[::-1]
+            if not top_10_fee_bldgs.empty:
+                bldg_labels = [
+                    f"{row['Display_Property']} ({row['Building_Address']})" if row['Building_Address'] != row['Display_Property'] else row['Display_Property']
+                    for _, row in top_10_fee_bldgs.iterrows()
+                ]
+                bldg_charges = top_10_fee_bldgs["total_charges"].tolist()
+                bldg_liabilities = top_10_fee_bldgs["total_fee_liability"].tolist()
+
+                bar_chart_options = {
+                    "tooltip": {
+                        "trigger": "axis",
+                        "axisPointer": {"type": "shadow"},
+                        "formatter": "{b}<br/>Total Charges: <b>{c} fees</b>",
+                    },
+                    "grid": {"left": "3%", "right": "6%", "bottom": "3%", "top": "3%", "containLabel": True},
+                    "xAxis": {
+                        "type": "value",
+                        "axisLabel": {"formatter": "{value}"},
+                        "splitLine": {"lineStyle": {"color": "#f1f5f9"}},
+                    },
+                    "yAxis": {
+                        "type": "category",
+                        "data": bldg_labels,
+                        "axisLabel": {"color": "#334155", "fontSize": 11},
+                    },
+                    "series": [
+                        {
+                            "name": "Fee Charges",
+                            "type": "bar",
+                            "data": bldg_charges,
+                            "itemStyle": {
+                                "color": {
+                                    "type": "linear",
+                                    "x": 0, "y": 0, "x2": 1, "y2": 0,
+                                    "colorStops": [
+                                        {"offset": 0, "color": "#e53935"},
+                                        {"offset": 1, "color": "#fb8c00"},
+                                    ],
+                                },
+                                "borderRadius": [0, 6, 6, 0],
+                            },
+                        }
+                    ],
+                }
+                st_echarts(bar_chart_options, height="380px")
+            else:
+                st.info("No building charge data available.")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with c_pie_fee:
+            st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+            st.markdown('<div class="chart-card-title"> Fee Breakdown by Infraction Type</div>', unsafe_allow_html=True)
+
+            if not fee_dist.empty:
+                pie_fee_data = [
+                    {"name": row["Fee_Type"], "value": int(row["charge_count"])}
+                    for _, row in fee_dist.iterrows()
+                    if row["charge_count"] > 0
+                ]
+                fee_donut_options = {
+                    "tooltip": {
+                        "trigger": "item",
+                        "formatter": "{b}: <b>{c} charges</b> ({d}%)",
+                    },
+                    "legend": {
+                        "orient": "horizontal",
+                        "bottom": "0%",
+                        "textStyle": {"fontSize": 10, "color": "#475569"},
+                    },
+                    "color": ["#013494", "#e53935", "#fb8c00", "#1e88e5", "#43a047", "#8e24aa", "#00acc1"],
+                    "series": [
+                        {
+                            "name": "Fee Category",
+                            "type": "pie",
+                            "radius": ["40%", "68%"],
+                            "center": ["50%", "45%"],
+                            "itemStyle": {
+                                "borderRadius": 5,
+                                "borderColor": "#fff",
+                                "borderWidth": 2,
+                            },
+                            "data": pie_fee_data,
+                        }
+                    ],
+                }
+                st_echarts(fee_donut_options, height="380px")
+            else:
+                st.info("No fee category data available.")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        # ── Visualizations Row 2: Annual Trend & Source Document ─────────────
+        annual_trend = get_annual_fee_trend(filtered_charges)
+        source_dist = get_fee_source_distribution(filtered_charges)
+
+        c_trend, c_src = st.columns([1.4, 1])
+
+        with c_trend:
+            st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+            st.markdown('<div class="chart-card-title"> Annual Fee Issuance & DOF Transfer Trend</div>', unsafe_allow_html=True)
+
+            if not annual_trend.empty:
+                years_list = [str(y) for y in annual_trend["Year_Issued"].tolist()]
+                total_series = annual_trend["charge_count"].tolist()
+                dof_series = annual_trend["dof_transferred"].tolist()
+
+                trend_options = {
+                    "tooltip": {
+                        "trigger": "axis",
+                        "axisPointer": {"type": "shadow"},
+                        "formatter": "{b}<br/>Assessed Charges: <b>{c0}</b><br/>Transferred to DOF: <b>{c1}</b>",
+                    },
+                    "legend": {"data": ["Total Assessed Fees", "Transferred to DOF (Tax Billed)"], "bottom": "0%"},
+                    "grid": {"left": "3%", "right": "4%", "bottom": "12%", "top": "5%", "containLabel": True},
+                    "xAxis": {"type": "category", "data": years_list, "axisLabel": {"color": "#475569"}},
+                    "yAxis": {"type": "value", "name": "Charges Count", "splitLine": {"lineStyle": {"color": "#f1f5f9"}}},
+                    "series": [
+                        {
+                            "name": "Total Assessed Fees",
+                            "type": "bar",
+                            "data": total_series,
+                            "itemStyle": {"color": PRIMARY, "borderRadius": [4, 4, 0, 0]},
+                        },
+                        {
+                            "name": "Transferred to DOF (Tax Billed)",
+                            "type": "bar",
+                            "data": dof_series,
+                            "itemStyle": {"color": "#60a5fa", "borderRadius": [4, 4, 0, 0]},
+                        },
+                    ],
+                }
+                st_echarts(trend_options, height="320px")
+            else:
+                st.info("No annual trend data available.")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with c_src:
+            st.markdown('<div class="chart-card">', unsafe_allow_html=True)
+            st.markdown('<div class="chart-card-title"> Fee Trigger Origin / Document Source</div>', unsafe_allow_html=True)
+
+            if not source_dist.empty:
+                src_pie_data = [
+                    {"name": row["Source_Type"], "value": int(row["charge_count"])}
+                    for _, row in source_dist.iterrows()
+                    if row["charge_count"] > 0
+                ]
+                src_donut_options = {
+                    "tooltip": {
+                        "trigger": "item",
+                        "formatter": "{b}: <b>{c} charges</b> ({d}%)",
+                    },
+                    "legend": {
+                        "orient": "horizontal",
+                        "bottom": "0%",
+                        "textStyle": {"fontSize": 10, "color": "#475569"},
+                    },
+                    "color": ["#1e88e5", "#fb8c00", "#43a047", "#8e24aa", "#94a3b8"],
+                    "series": [
+                        {
+                            "name": "Trigger Source",
+                            "type": "pie",
+                            "radius": ["38%", "66%"],
+                            "center": ["50%", "45%"],
+                            "itemStyle": {
+                                "borderRadius": 5,
+                                "borderColor": "#fff",
+                                "borderWidth": 2,
+                            },
+                            "data": src_pie_data,
+                        }
+                    ],
+                }
+                st_echarts(src_donut_options, height="320px")
+            else:
+                st.info("No trigger source data available.")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        # ── Building-Level Fee Summary Table ─────────────────────────────────
+        divider()
+        section_header(
+            "Building-Level Municipal Fee Compliance Directory",
+            "Comprehensive breakdown of fee infractions, DOF transfer rates, and estimated liabilities per building.",
+        )
+
+        display_b_summary = b_summary.copy()
+        display_b_summary["latest_fee_formatted"] = display_b_summary["latest_fee_date"].dt.strftime("%b %d, %Y")
+
+        b_table = display_b_summary[[
+            "Display_Property",
+            "Building_Address",
+            "Display_Borough",
+            "bbl",
+            "total_charges",
+            "total_fee_liability",
+            "dof_transferred",
+            "dof_transfer_pct",
+            "top_infraction",
+            "latest_fee_formatted",
+        ]].rename(columns={
+            "Display_Property": "Property / Project",
+            "Building_Address": "Street Address",
+            "Display_Borough": "Borough",
+            "bbl": "BBL",
+            "total_charges": "Total Charges",
+            "total_fee_liability": "Est. Liability ($)",
+            "dof_transferred": "DOF Transferred",
+            "dof_transfer_pct": "DOF Transfer %",
+            "top_infraction": "Primary Infraction",
+            "latest_fee_formatted": "Latest Fee Date",
+        })
+
+        st.dataframe(
+            b_table,
+            column_config={
+                "Property / Project": st.column_config.TextColumn("Property / Project", width="medium"),
+                "Street Address": st.column_config.TextColumn("Street Address", width="medium"),
+                "Total Charges": st.column_config.NumberColumn("Total Charges", format="%d"),
+                "Est. Liability ($)": st.column_config.NumberColumn("Est. Liability", format="$%d"),
+                "DOF Transferred": st.column_config.NumberColumn("DOF Transferred", format="%d"),
+                "DOF Transfer %": st.column_config.NumberColumn("DOF Transfer %", format="%.1f%%"),
+                "Primary Infraction": st.column_config.TextColumn("Primary Infraction", width="medium"),
+                "Latest Fee Date": st.column_config.TextColumn("Latest Fee Date", width="small"),
+            },
+            hide_index=True,
+            width="stretch",
+            height=340,
+        )
+
+        # ── Individual Charges Explorer ──────────────────────────────────────
+        divider()
+        section_header(
+            "Individual Charge Record Explorer",
+            "Search, filter, and inspect specific municipal charge citations, issue dates, and DOF billing transfers.",
+        )
+
+        c_search_fee, c_type_fee, c_dof_toggle, c_dl_fee = st.columns([2, 1.5, 1, 1])
+
+        with c_search_fee:
+            charge_query = st.text_input(
+                "Search Charge Records",
+                placeholder="Search by Address, Property, BBL, or Fee ID...",
+                label_visibility="collapsed",
+            )
+
+        with c_type_fee:
+            available_types = ["All Fee Types"] + sorted(filtered_charges["Fee_Type"].dropna().unique().tolist())
+            selected_type = st.selectbox("Filter Fee Type", options=available_types, label_visibility="collapsed")
+
+        with c_dof_toggle:
+            dof_only = st.toggle("DOF Only", value=False, help="Show only fees transferred to Dept of Finance for tax billing")
+
+        display_charges = filtered_charges.copy()
+        if charge_query:
+            cq = charge_query.lower().strip()
+            display_charges = display_charges[
+                display_charges["Building_Address"].str.lower().str.contains(cq)
+                | display_charges["Display_Property"].str.lower().str.contains(cq)
+                | display_charges["bbl"].str.contains(cq)
+                | display_charges["feeid"].astype(str).str.contains(cq)
+            ]
+
+        if selected_type != "All Fee Types":
+            display_charges = display_charges[display_charges["Fee_Type"] == selected_type]
+
+        if dof_only:
+            display_charges = display_charges[display_charges["Transferred_To_DOF"]]
+
+        display_charges_table = display_charges[[
+            "feeid",
+            "Display_Property",
+            "Building_Address",
+            "Display_Borough",
+            "bbl",
+            "Fee_Type",
+            "Source_Type",
+            "Estimated_Fee_Amount",
+            "feeissueddate_dt",
+            "doftransferdate_dt",
+            "lifecycle",
+        ]].copy()
+
+        display_charges_table["Issued_Date_Str"] = display_charges_table["feeissueddate_dt"].dt.strftime("%Y-%m-%d")
+        display_charges_table["DOF_Date_Str"] = display_charges_table["doftransferdate_dt"].dt.strftime("%Y-%m-%d").fillna("Pending / Not Transferred")
+
+        renamed_charges = display_charges_table[[
+            "feeid",
+            "Display_Property",
+            "Building_Address",
+            "Display_Borough",
+            "bbl",
+            "Fee_Type",
+            "Source_Type",
+            "Estimated_Fee_Amount",
+            "Issued_Date_Str",
+            "DOF_Date_Str",
+            "lifecycle",
+        ]].rename(columns={
+            "feeid": "Fee ID",
+            "Display_Property": "Property / Project",
+            "Building_Address": "Street Address",
+            "Display_Borough": "Borough",
+            "bbl": "BBL",
+            "Fee_Type": "Fee Infraction Type",
+            "Source_Type": "Source Document",
+            "Estimated_Fee_Amount": "Est. Fee ($)",
+            "Issued_Date_Str": "Fee Issued Date",
+            "DOF_Date_Str": "DOF Transfer Date",
+            "lifecycle": "Building Status",
+        })
+
+        with c_dl_fee:
+            csv_fee_data = renamed_charges.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label=" Export CSV",
+                data=csv_fee_data,
+                file_name="riseboro_hpd_fee_charges.csv",
+                mime="text/csv",
+                width="stretch",
+            )
+
+        st.dataframe(
+            renamed_charges,
+            column_config={
+                "Fee ID": st.column_config.TextColumn("Fee ID", width="small"),
+                "Est. Fee ($)": st.column_config.NumberColumn("Est. Fee ($)", format="$%.2f"),
+                "Property / Project": st.column_config.TextColumn("Property / Project", width="medium"),
+                "Street Address": st.column_config.TextColumn("Street Address", width="medium"),
+                "Fee Infraction Type": st.column_config.TextColumn("Fee Type", width="medium"),
+                "Source Document": st.column_config.TextColumn("Source", width="small"),
+                "Fee Issued Date": st.column_config.TextColumn("Issued Date", width="small"),
+                "DOF Transfer Date": st.column_config.TextColumn("DOF Billed", width="small"),
+            },
+            hide_index=True,
+            width="stretch",
+            height=380,
+        )
+
+        # ── Municipal Regulatory Guidance Callout ────────────────────────────
+        st.markdown(
+            """
+            <div class="highlight-box">
+                <div style="font-weight: 700; color: #013494; font-size: 1rem; margin-bottom: 0.35rem;">
+                     NYC Housing Maintenance Code & DOF Billing Notice
+                </div>
+                <div style="font-size: 0.88rem; color: #334155; line-height: 1.5;">
+                    <b>Statutory Assessment Rules:</b> Pursuant to NYC Administrative Code § 27-2115(k)(1), HPD assesses a $200 inspection fee when a reinspection confirms an open hazardous (Class B) or immediately hazardous (Class C) violation, heat/hot water failure, or Alternative Enforcement Program (AEP) complaint inspection.
+                    <br/><br/>
+                    <b>Department of Finance (DOF) Transfer:</b> Unpaid HPD charges are routinely transferred to the NYC Department of Finance (DOF account types 236, 240, 243) and added directly to the property's quarterly property tax statement. If left unpaid, these charges can accrue interest and constitute a municipal lien against the property.
+                    <br/><br/>
+                    <b>Dispute & Abatement:</b> Property managers can contest or request an administrative review of inspection fees within 30 days of issuance by filing an HPD Fee Abatement Request or verifying timely violation certification prior to the inspection date.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+

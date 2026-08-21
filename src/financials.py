@@ -16,6 +16,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from src.sources import hpd_charges
+
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 UNITS_RENTS_PATH = os.path.join(DATA_DIR, "units_rents.csv")
 BUILDING_CODES_PATH = os.path.join(DATA_DIR, "building_codes.csv")
@@ -422,3 +424,264 @@ def calculate_maintenance_drag(
     }
 
     return drag_df, wo_cat, kpis
+
+
+# ── Standard NYC HPD Statutory Fee Schedule ───────────────────────────────────
+HPD_FEE_SCHEDULE: dict[str, float] = {
+    "INSPECTION FEE": 200.0,
+    "Hot Water Inspection Fee": 200.0,
+    "Heat Inspection Fee": 200.0,
+    "AEP Complaint Inspection Fee": 200.0,
+    "Initial Re-inspection Fee": 200.0,
+    "Six Month Program Fee": 1000.0,
+    "False Certification Fee": 500.0,
+}
+
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def load_portfolio_hpd_charges(renovations_df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """
+    Fetch and clean NYC HPD Fee Charges (dataset cp6j-7bjj) for all building addresses in renovations.csv.
+    Batches SoQL address queries to NYC Open Data and maps to RiseBoro projects and borough data.
+    """
+    from src.sources import hpd_charges
+
+    if renovations_df is None or renovations_df.empty:
+        renovations_df = load_renovations()
+
+    if renovations_df.empty:
+        return pd.DataFrame()
+
+    # Build address filter clauses from renovations.csv
+    addr_clauses: list[str] = []
+    addr_proj_map: dict[tuple[str, str], tuple[str, str, str]] = {}
+
+    for _, row in renovations_df.iterrows():
+        project = str(row.get("PROJECT_NAME", "")).strip()
+        raw_addr = str(row.get("ADDRESS", "")).strip()
+        if not raw_addr or raw_addr.lower() in ("nan", "none", ""):
+            continue
+
+        h, s, b = hpd_charges.parse_address(raw_addr)
+        if not h or not s:
+            continue
+        boro = b or "BROOKLYN"
+
+        house_nums = [h]
+        if "-" in h:
+            parts = h.split("-")
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                p1, p2 = int(parts[0]), int(parts[1])
+                if p2 - p1 <= 10:
+                    house_nums = [str(n) for n in range(p1, p2 + 1, 2)]
+                else:
+                    house_nums = [parts[0], parts[1], h]
+            else:
+                house_nums = [h]
+
+        for house_num in house_nums:
+            safe_street = s.replace("'", "''")
+            clause = f"(housenumber = '{house_num}' AND upper(streetname) like '{safe_street}%')"
+            addr_clauses.append(clause)
+            addr_proj_map[(house_num, s)] = (project, raw_addr, boro)
+
+    if not addr_clauses:
+        return pd.DataFrame()
+
+    # Query Socrata in chunks with OR
+    chunk_size = 25
+    all_frames: list[pd.DataFrame] = []
+
+    for i in range(0, len(addr_clauses), chunk_size):
+        chunk = addr_clauses[i : i + chunk_size]
+        or_where = " OR ".join(chunk)
+        try:
+            chunk_df = hpd_charges.fetch(where=or_where, limit=5000)
+            if not chunk_df.empty:
+                all_frames.append(chunk_df)
+        except Exception:
+            continue
+
+    if not all_frames:
+        return pd.DataFrame()
+
+    charges = pd.concat(all_frames, ignore_index=True).drop_duplicates(subset=["feeid"])
+    if charges.empty:
+        return pd.DataFrame()
+
+    # Standardize types and dates
+    charges["bbl"] = charges["bbl"].astype(str).str.strip().str.split(".").str[0]
+    charges["bin"] = charges["bin"].astype(str).str.strip().str.split(".").str[0]
+    charges["feeissueddate_dt"] = pd.to_datetime(charges["feeissueddate"], errors="coerce")
+    charges["doftransferdate_dt"] = pd.to_datetime(charges["doftransferdate"], errors="coerce")
+    charges["Transferred_To_DOF"] = charges["doftransferdate_dt"].notna()
+    charges["Year_Issued"] = charges["feeissueddate_dt"].dt.year.fillna(0).astype(int)
+    charges["Year_Month"] = charges["feeissueddate_dt"].dt.strftime("%Y-%m")
+
+    # Clean text columns
+    charges["housenumber"] = charges["housenumber"].fillna("").astype(str).str.strip()
+    charges["streetname"] = charges["streetname"].fillna("").astype(str).str.strip()
+    charges["Building_Address"] = (charges["housenumber"] + " " + charges["streetname"]).str.title().str.strip()
+
+    charges["Fee_Type"] = charges["feetype"].fillna("Inspection Fee").astype(str).str.strip()
+    charges["Source_Type"] = charges["feesourcetype"].fillna("Complaint").astype(str).str.strip()
+
+    # Calculate statutory estimated fee amount
+    charges["Estimated_Fee_Amount"] = charges["Fee_Type"].map(
+        lambda t: HPD_FEE_SCHEDULE.get(t, 200.0)
+    )
+
+    # Map project name and borough from renovations.csv
+    def _match_proj(r: pd.Series) -> str:
+        h = str(r.get("housenumber", "")).strip()
+        s = hpd_charges.normalize_street_name(str(r.get("streetname", "")))
+        if (h, s) in addr_proj_map:
+            return addr_proj_map[(h, s)][0]
+        for (map_h, map_s), (proj, _, _) in addr_proj_map.items():
+            if map_h == h and (map_s.startswith(s) or s.startswith(map_s)):
+                return proj
+        return str(r.get("Building_Address", "Portfolio Property"))
+
+    def _match_raw_addr(r: pd.Series) -> str:
+        h = str(r.get("housenumber", "")).strip()
+        s = hpd_charges.normalize_street_name(str(r.get("streetname", "")))
+        if (h, s) in addr_proj_map:
+            return addr_proj_map[(h, s)][1]
+        for (map_h, map_s), (_, raw_a, _) in addr_proj_map.items():
+            if map_h == h and (map_s.startswith(s) or s.startswith(map_s)):
+                return raw_a
+        return str(r.get("Building_Address", ""))
+
+    charges["PROJECT_NAME"] = charges.apply(_match_proj, axis=1)
+    charges["Matched_Address"] = charges.apply(_match_raw_addr, axis=1)
+    charges["Display_Property"] = charges["PROJECT_NAME"]
+    charges["Display_Borough"] = charges["boro"].fillna("BROOKLYN").astype(str).str.title()
+
+    return charges
+
+
+def calculate_hpd_fee_kpis(
+    charges_df: pd.DataFrame,
+    building_df: Optional[pd.DataFrame] = None,
+) -> dict[str, Any]:
+    """Calculate executive KPI metrics for portfolio HPD fee charges."""
+    if charges_df.empty:
+        return {
+            "total_charges": 0,
+            "total_fee_amount": 0.0,
+            "affected_properties": 0,
+            "dof_transferred_count": 0,
+            "dof_transfer_pct": 0.0,
+            "top_fee_type": "None",
+            "latest_fee_date": "N/A",
+        }
+
+    total_charges = len(charges_df)
+    total_fee_amount = charges_df["Estimated_Fee_Amount"].sum()
+    affected_properties = charges_df["Display_Property"].nunique()
+    dof_transferred_count = int(charges_df["Transferred_To_DOF"].sum())
+    dof_transfer_pct = (dof_transferred_count / max(total_charges, 1)) * 100.0
+
+    top_fee_mode = charges_df["Fee_Type"].mode()
+    top_fee_type = str(top_fee_mode.iloc[0]) if not top_fee_mode.empty else "Inspection Fee"
+
+    latest_date_dt = charges_df["feeissueddate_dt"].max()
+    latest_fee_date = latest_date_dt.strftime("%b %d, %Y") if pd.notna(latest_date_dt) else "N/A"
+
+    return {
+        "total_charges": total_charges,
+        "total_fee_amount": total_fee_amount,
+        "affected_properties": affected_properties,
+        "dof_transferred_count": dof_transferred_count,
+        "dof_transfer_pct": dof_transfer_pct,
+        "top_fee_type": top_fee_type,
+        "latest_fee_date": latest_fee_date,
+    }
+
+
+def get_building_fee_summary(charges_df: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate HPD fee charges per building and project."""
+    if charges_df.empty:
+        return pd.DataFrame()
+
+    def _get_top_infraction(series: pd.Series) -> str:
+        mode_val = series.mode()
+        return str(mode_val.iloc[0]) if not mode_val.empty else "N/A"
+
+    summary = (
+        charges_df.groupby(["Display_Property", "Building_Address", "bbl", "Display_Borough"], observed=False)
+        .agg(
+            total_charges=("feeid", "count"),
+            total_fee_liability=("Estimated_Fee_Amount", "sum"),
+            dof_transferred=("Transferred_To_DOF", "sum"),
+            latest_fee_date=("feeissueddate_dt", "max"),
+            top_infraction=("Fee_Type", _get_top_infraction),
+        )
+        .reset_index()
+    )
+
+    summary["dof_transfer_pct"] = (
+        summary["dof_transferred"] / summary["total_charges"].replace(0, 1)
+    ) * 100.0
+    summary = summary.sort_values(["total_charges", "total_fee_liability"], ascending=[False, False])
+    return summary
+
+
+def get_fee_type_distribution(charges_df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate frequency, percentage, and liability by fee infraction type."""
+    if charges_df.empty:
+        return pd.DataFrame()
+
+    dist = (
+        charges_df.groupby("Fee_Type", observed=False)
+        .agg(
+            charge_count=("feeid", "count"),
+            total_fee_liability=("Estimated_Fee_Amount", "sum"),
+            avg_fee=("Estimated_Fee_Amount", "mean"),
+        )
+        .reset_index()
+        .sort_values("charge_count", ascending=False)
+    )
+
+    dist["pct_of_total"] = (dist["charge_count"] / max(len(charges_df), 1)) * 100.0
+    return dist
+
+
+def get_annual_fee_trend(charges_df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate annual fee charge volume and liability."""
+    if charges_df.empty:
+        return pd.DataFrame()
+
+    valid_years = charges_df[charges_df["Year_Issued"] > 2000].copy()
+    if valid_years.empty:
+        return pd.DataFrame()
+
+    trend = (
+        valid_years.groupby("Year_Issued", observed=False)
+        .agg(
+            charge_count=("feeid", "count"),
+            total_fee_liability=("Estimated_Fee_Amount", "sum"),
+            dof_transferred=("Transferred_To_DOF", "sum"),
+        )
+        .reset_index()
+        .sort_values("Year_Issued")
+    )
+    return trend
+
+
+def get_fee_source_distribution(charges_df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate distribution of source documents (Complaint, Violation, Route for Inspection, etc.)."""
+    if charges_df.empty:
+        return pd.DataFrame()
+
+    sources = (
+        charges_df.groupby("Source_Type", observed=False)
+        .agg(
+            charge_count=("feeid", "count"),
+            total_fee_liability=("Estimated_Fee_Amount", "sum"),
+        )
+        .reset_index()
+        .sort_values("charge_count", ascending=False)
+    )
+    return sources
+

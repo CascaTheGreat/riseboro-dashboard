@@ -3,3 +3,4 @@ pandas>=2.0.0
 requests>=2.31.0
 openpyxl>=3.0.0
 streamlit-echarts[pyecharts]>=0.7.0
+scipy>=1.12.0

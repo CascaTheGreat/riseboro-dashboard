@@ -1,102 +1,106 @@
-# Integrate Analysis Helpers into Dashboard (Per-Unit)
+# Implementation Plan: Financials-Focused Dashboard
 
-The `src/analysis/` module contains three powerful helpers — [trends.py](file:///Users/leoledlow/Projects/riseboro_streamlit/src/analysis/trends.py), [hotspots.py](file:///Users/leoledlow/Projects/riseboro_streamlit/src/analysis/hotspots.py), and [significance.py](file:///Users/leoledlow/Projects/riseboro_streamlit/src/analysis/significance.py) — that are currently unused by the Streamlit dashboard. These operate on an enriched dataset with columns like `source_property`, `prop_unit`, `final_category`, `ttl_days`, `call_date`, `Year`, `Month`, `Month_Num`, and `status`. The dashboard's work-order data (via upload) has a different column schema (`Building`, `Prop-Unit`, `Call Date`, `Brief Desc`, `issue_category`, `Status`). This plan bridges that gap and adds a dedicated **per-unit analytics** section to [home.py](file:///Users/leoledlow/Projects/riseboro_streamlit/pages/home.py).
+Create a dedicated, interactive **Financials Dashboard** for RiseBoro that analyzes portfolio revenue economics, capital development stacks, subsidy structures, and maintenance operational expense (OpEx) drag using the existing datasets in the repository.
+
+---
 
 ## User Review Required
 
 > [!IMPORTANT]
-> **Column mapping assumption.** The analysis helpers expect columns like `source_property`, `prop_unit`, `final_category`, `ttl_days`, and `Month`. The dashboard data has `Building`, `Prop-Unit`, `issue_category`, and no `ttl_days` (resolution time). The plan introduces an adapter layer to rename columns, but **resolution-time metrics will show "N/A"** unless your CSV includes start/completion dates that let us compute duration. Is that acceptable, or do you have a column for resolution time?
+> **Data Sources & Integration Strategy:**
+> 1. **Baseline Financials (Instant, No Upload Required):** The dashboard will immediately load and display portfolio financials from [data/units_rents.csv](file:///Users/leoledlow/Projects/riseboro_streamlit/data/units_rents.csv) (3,135 units, ~$55.6M annualized rent roll), [data/building_codes.csv](file:///Users/leoledlow/Projects/riseboro_streamlit/data/building_codes.csv) (>$5.5B in Total Development Cost across 145+ projects, LIHTC syndicators, permanent lenders, ownership stakes, commercial leases), and [data/renovations.csv](file:///Users/leoledlow/Projects/riseboro_streamlit/data/renovations.csv).
+> 2. **Maintenance Cost / OpEx Drag (Unlocked with Work Orders):** When work orders are uploaded via [pages/upload.py](file:///Users/leoledlow/Projects/riseboro_streamlit/pages/upload.py) (`st.session_state.wo_df`), the dashboard will seamlessly integrate `Unit Price`, `Quantity`, and `Total` to calculate maintenance costs vs. rent roll per property and trade. If no WO data is uploaded, helpful guidance and fallback summaries will be shown.
 
-> [!WARNING]
-> **`scipy` dependency.** The `significance.py` module requires `scipy` for `stats.linregress` and `stats.chisquare`. Verify it's in your `venv` — if not, we'll add it to `requirements.txt`.
+> [!NOTE]
+> **Multi-Page Navigation:**
+> The new dashboard will be integrated as a dedicated page in [app.py](file:///Users/leoledlow/Projects/riseboro_streamlit/app.py) (`pages/financials.py`) alongside the Operations Dashboard and the Upload page.
+
+---
 
 ## Open Questions
 
-1. **Resolution time** — Does your uploaded CSV have a completion/close date column we can use to compute `ttl_days`? If not, we'll skip the "Avg Resolution (Days)" metric from hotspots and show WO count + category mix only.
+1. **Rent Roll Baseline Scope:** In `units_rents.csv`, ~136 units have `$0.00` recorded rent (often representing subsidized, voucher, or non-revenue units). Should our default average rent calculations exclude `$0` units, or do you prefer showing both Gross Potential Rent (market/standard) and Net Collected / Subsidized distributions? *(Recommendation: We will calculate metrics both ways with a toggle or clear subtitle breakdown).*
+2. **Maintenance Drag Period:** For the OpEx vs. Revenue analysis (WO Cost / Annual Rent Roll), should we annualize the WO spend based on the date range selected in the filter, or compare total historical WO spend against current annual rent roll? *(Recommendation: Provide an annualized repair rate so it scales proportionally).*
 
-2. **Unit filter scope** — Should the new per-unit section respect the existing sidebar filters (date range, building, status) or always analyze the full raw dataset? The current high-volume tables use `recent_raw` (unfiltered, last 3 years). I'd recommend the same approach for consistency.
-
-3. **New page vs. section** — Should this be a new page (e.g., `pages/unit_analysis.py`) or a new section appended to the existing home dashboard? I'm proposing it as a collapsible section at the bottom of `home.py`, but a separate page keeps the home page lighter.
+---
 
 ## Proposed Changes
 
-### Adapter Layer
+### Core Financial Processing Module
 
-#### [NEW] [`src/analysis/adapter.py`](file:///Users/leoledlow/Projects/riseboro_streamlit/src/analysis/adapter.py)
-
-A thin adapter that renames dashboard columns to match the analysis module's expected schema, enabling the helpers to be called without modifying their internals.
-
-| Dashboard Column | Analysis Column | Notes |
-|---|---|---|
-| `Building` | `source_property` | YARDI property code |
-| `Prop-Unit` | `prop_unit` | Unit identifier |
-| `issue_category` | `final_category` | Category label |
-| `Call Date` | `call_date` | Already datetime |
-| `Status` | `status` | WO status |
-| `Brief Desc` | `description` | Free-text desc |
-
-The adapter will:
-- Rename the columns above
-- Add `Year`, `Month_Num`, `Month` via `trends.add_time_parts()`
-- Compute `ttl_days` from `Start Date` → `Call Date` if both exist, else set to `NaN`
-- Return a DataFrame compatible with all three analysis modules
+#### [NEW] [src/financials.py](file:///Users/leoledlow/Projects/riseboro_streamlit/src/financials.py)
+A clean, modular data processing and aggregation service:
+- `load_units_rents()`: Clean `Rent` currency strings into numeric floats, standardize unit types, extract bedroom counts, and join with property metadata.
+- `load_building_financials()`: Clean and normalize `Total Development Cost_PROJECT_2`, `Total Construction Cost_PROJECT_2`, LIHTC syndicators, permanent lenders, tax credit structures (4% / 9%), ownership percentages, and commercial spaces.
+- `calculate_portfolio_kpis()`: Gross Potential Rent (Monthly & Annualized), Active Unit Count, Average Rent per Bedroom, Total Development Cost, Total Construction Cost, and Total Commercial SqFt.
+- `calculate_property_rent_summary()`: Aggregated rent roll table per property/project with unit counts, average rent, and bedroom distributions.
+- `calculate_maintenance_drag(wo_df, rent_summary)`: Computes total maintenance spend by property and category, repair cost per unit, and maintenance spend as a percentage of gross rent roll.
 
 ---
 
-### Dashboard Integration
+### Dashboard User Interface
 
-#### [MODIFY] [`pages/home.py`](file:///Users/leoledlow/Projects/riseboro_streamlit/pages/home.py)
+#### [NEW] [pages/financials.py](file:///Users/leoledlow/Projects/riseboro_streamlit/pages/financials.py)
+A full-featured Streamlit page styled with RiseBoro's design system:
 
-Add a new **"Unit-Level Analytics"** section between the existing "High-Volume Tracking" section and the "Volume & Status" section (~line 771). This section will contain:
+1. **Hero & Top-Level KPI Bar:**
+   - **Annualized Gross Rent Roll:** `~$55.56M`
+   - **Monthly Rent Roll:** `~$4.63M`
+   - **Active Residential Units:** `3,135` across 57 properties
+   - **Avg. Monthly Rent / Unit:** `$1,544` (excluding $0/subsidized)
+   - **Total Portfolio Development Cost:** `~$5.55B` (across 145+ projects)
+   - **Maintenance OpEx / Drag:** *(Dynamic when WO uploaded)*
 
-**1. Unit Hotspot Summary (from `hotspots.py`)**
-- KPI row: total apartment units analyzed, avg WOs/unit (portfolio-wide), top-10% avg WOs/unit
-- Uses `hotspots.exclude_non_apartments()` → `hotspots.compare_groups()` to show a 3-row comparison table (All Units vs Top 10% vs Top 10)
+2. **Global Sidebar Filters:**
+   - Filter by Borough (Brooklyn, Queens, Bronx, Manhattan)
+   - Filter by Housing Type (Multi-Family, Senior, Supportive, etc.)
+   - Filter by Property / Project
+   - Filter by Bedroom Count (Studio, 1BR, 2BR, 3BR, 4BR)
 
-**2. Top Hotspot Units Table (from `hotspots.py`)**
-- `hotspots.top_units_detail(df, n=15)` rendered as an `st.dataframe` with column configs
-- Columns: Unit, Property, Total WOs, Avg Resolution (Days), Primary Issue (Share %)
-- Joined with `bldg_info` for address/project context
+3. **Tab 1: Rent Roll & Revenue Economics (`:material/attach_money:`)**
+   - **Top Properties by Rent Roll:** Interactive horizontal bar chart comparing the top revenue-generating properties (Sumner, Baisley, Hillside, 326 Rockaway, 1601 DeKalb, etc.).
+   - **Rent Distribution & Tiers:** Histogram/tier chart (`<$500`, `$500–$1,000`, `$1,000–$1,500`, `$1,500–$2,000`, `$2,000–$2,500`, `$2,500+`).
+   - **Bedroom Pricing Dynamics:** Box plot / bar breakdown of average rent and rent-per-bedroom.
+   - **Unit-Level Rent Explorer:** Searchable, paginated data table with column formatting (`$%.2f`), bedroom badges, and CSV export.
 
-**3. Per-Unit Trend Charts (from `trends.py`)**
-- A `st.selectbox` to pick a specific unit from the top hotspot list
-- For the selected unit:
-  - **Yearly WO count** line chart via `trends.yearly_counts()` — shows whether the unit's volume is growing or stable
-  - **Monthly seasonality** bar chart via `trends.monthly_counts(fill_missing=True)` — shows which months are peak
+4. **Tab 2: Capital Stack, Subsidies & Development (`:material/account_balance:`)**
+   - **Development & Construction Capital:** Project-by-project breakdown of Total Development Cost (TDC) vs. Construction Cost.
+   - **Tax Credit & Subsidy Structure:** Distribution of 4% LIHTC, 9% LIHTC, Section 8, ESSHI, NYC 15/15, and HPD/HCR programs.
+   - **Lenders & Syndicators:** Breakdown of public/private permanent lenders (HPD, HDC, HCR, Goldman Sachs, BofA, Webster, Merchants, Freddie TEL) and LIHTC syndicators (NEF, Redstone, Wells Fargo, SunAmerica, Camber).
+   - **RiseBoro Ownership & Joint Venture Stakes:** Distribution of ownership % across entities.
 
-**4. Trend Significance Badges (from `significance.py`)**
-- For the selected unit (if it has ≥3 years of data):
-  - `significance.yearly_trend()` → display slope, p-value, and a 🔴/🟢 badge for statistically significant increasing/decreasing trend
-  - `significance.seasonality()` → display chi² p-value and a badge if seasonality is statistically significant
-  - `significance.month_outliers()` → list months that are statistically above/below the uniform expectation
+5. **Tab 3: Maintenance OpEx & Cost Drag (`:material/build:`)**
+   - *Active when work orders are present in `session_state.wo_df`*
+   - **Maintenance Spend by Trade / Category:** Work order cost breakdown by trade (Plumbing, Electrical, HVAC, Extermination, Carpentry, etc.).
+   - **Maintenance Drag Ranking:** Repair spend as a percentage of property annual rent roll (identifying buildings where repair costs erode revenue).
+   - **High-Cost Unit Outliers:** Top 15 units with highest repair expenses and average cost per work order.
+   - **Zero-State Callout:** If work orders have not been uploaded yet, shows an informative callout directing users to the upload page.
+
+6. **Tab 4: Commercial Portfolio & Vintage (`:material/store:`)**
+   - **Commercial Space Footprint:** Leased sqft by use type (Retail, Community, Healthcare, Supermarket, Safe House, Urban Farm).
+   - **Rehab Vintage & Capital Life:** Timeline of construction completion dates and most recent rehabilitation years from `renovations.csv`.
 
 ---
 
-### Config / Dependencies
+### App Navigation Update
 
-#### [MODIFY] [`src/config.py`](file:///Users/leoledlow/Projects/riseboro_streamlit/src/config.py)
+#### [MODIFY] [app.py](file:///Users/leoledlow/Projects/riseboro_streamlit/app.py)
+Register `pages/financials.py` in `st.navigation`:
+- Add `st.Page("pages/financials.py", title="Financials", icon=":material/payments:")`
 
-No changes needed — `MONTH_MAP` and `MONTH_NAMES` are already exported and will be used by the adapter.
-
-#### [VERIFY] `requirements.txt`
-
-Confirm `scipy` is listed. If not, add it.
+---
 
 ## Verification Plan
 
 ### Automated Tests
+- Test data loading, cleaning, and currency parsing in `src/financials.py` against all three CSV files.
 ```bash
-# Verify scipy is importable
-cd /Users/leoledlow/Projects/riseboro_streamlit && source venv/bin/activate && python -c "from scipy import stats; print('scipy OK')"
-
-# Verify adapter module imports cleanly
-python -c "from src.analysis.adapter import adapt_for_analysis; print('adapter OK')"
+./venv/bin/python -c "from src.financials import load_units_rents, load_building_financials; ur = load_units_rents(); bf = load_building_financials(); print('Data loaded:', len(ur), len(bf))"
 ```
 
 ### Manual Verification
-- Load the app at `http://localhost:8501`, upload work-order data, navigate to the home dashboard
-- Scroll to the new "Unit-Level Analytics" section
-- Verify the hotspot summary table renders with meaningful numbers
-- Select a top unit from the dropdown and confirm the yearly + monthly charts render
-- Verify significance badges appear for units with sufficient data
-- Confirm existing dashboard sections are unaffected
+1. Launch Streamlit application: `streamlit run app.py`
+2. Navigate to the new **Financials** page from the sidebar.
+3. Verify KPI cards render accurate portfolio totals (~$55.6M annual rent roll, ~$5.55B TDC).
+4. Test filtering by borough, property, and bedroom count; verify charts and tables react dynamically.
+5. Upload a work order CSV in the Upload tab, then navigate back to Financials Tab 3 ("Maintenance OpEx & Cost Drag") to confirm maintenance drag and category spend populate seamlessly.

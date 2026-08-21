@@ -76,14 +76,31 @@ def adapt_for_analysis(df: pd.DataFrame, building_info: pd.DataFrame | None = No
         out["Month"] = pd.Series(dtype="float")
 
     # Compute resolution duration in days (ttl_days)
-    # Using Start Date and Call Date
-    start_col = "Start Date" if "Start Date" in out.columns else ("start_date" if "start_date" in out.columns else None)
-    if start_col and "call_date" in out.columns:
-        start_dates = pd.to_datetime(out[start_col], errors="coerce")
-        diff_days = (start_dates - out["call_date"]).dt.total_seconds() / 86400.0
-        # If diff is negative, set to 0; if exceeds a year (365 days), consider resolved / cap at 365 days
-        diff_days = diff_days.mask(diff_days < 0, 0)
-        diff_days = diff_days.mask(diff_days > 365, 365)
+    # Search for completion / close / start date columns
+    date_candidates = [
+        "Completion Date", "Completed Date", "Close Date", "Closed Date",
+        "Date Completed", "Finish Date", "End Date", "Resolution Date",
+        "Start Date", "start_date"
+    ]
+    end_col = None
+    for cand in date_candidates:
+        if cand in out.columns and out[cand].notna().any():
+            end_col = cand
+            break
+
+    if end_col and "call_date" in out.columns:
+        end_dates = pd.to_datetime(out[end_col], errors="coerce")
+        # Compute difference in days
+        diff_days = (end_dates - out["call_date"]).dt.total_seconds() / 86400.0
+        
+        # Filter invalid / erroneous values:
+        # If end_date is before call_date by more than 1 day, it's an erroneous timestamp (set to NaN)
+        diff_days = diff_days.mask(diff_days < -1, np.nan)
+        # If slightly negative within same day (-1 <= diff < 0 due to hour/timezone offsets), treat as 0
+        diff_days = diff_days.mask((diff_days < 0) & (diff_days >= -1), 0.0)
+        # If exceeds a year (365 days), cap at 365 as considered resolved
+        diff_days = diff_days.mask(diff_days > 365, 365.0)
+        
         out["ttl_days"] = diff_days
     else:
         out["ttl_days"] = np.nan

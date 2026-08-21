@@ -127,7 +127,10 @@ if has_data:
             standard_renames[col] = "Status"
         elif col_lower in ("call date", "call_date", "date"):
             standard_renames[col] = "Call Date"
-        elif col_lower in ("start date", "start_date"):
+        elif col_lower in (
+            "start date", "start_date", "completion date", "completed date",
+            "close date", "closed date", "end date", "date completed", "finish date", "resolution date"
+        ):
             standard_renames[col] = "Start Date"
         elif col_lower in ("employee", "emp"):
             standard_renames[col] = "Employee"
@@ -857,9 +860,20 @@ if not apts_df.empty and "prop_unit" in apts_df.columns and apts_df["prop_unit"]
         )
         top_units_count = min(15, total_apts)
         top_detail_df = top_units_detail(apts_df, n=top_units_count).reset_index()
+
+        def _fmt_res_table(v):
+            if pd.isna(v) or v is None:
+                return "N/A"
+            if v == 0:
+                return "Same day (<1d)"
+            elif v < 1:
+                return f"{v*24:.0f} hrs"
+            else:
+                return f"{v:.1f} days"
+
         top_detail_df["Avg Resolution (Days)"] = top_detail_df[
             "Avg Resolution (Days)"
-        ].apply(lambda v: f"{v:.1f} days" if pd.notna(v) else "N/A")
+        ].apply(_fmt_res_table)
 
         st.dataframe(
             top_detail_df,
@@ -904,7 +918,7 @@ if not apts_df.empty and "prop_unit" in apts_df.columns and apts_df["prop_unit"]
         if "Avg Resolution (Days)" in comp_table.columns:
             comp_table["Avg Resolution (Days)"] = comp_table[
                 "Avg Resolution (Days)"
-            ].apply(lambda v: f"{v:.1f} d" if pd.notna(v) else "N/A")
+            ].apply(lambda v: f"{v:.1f} d" if pd.notna(v) and v > 0 else ("<1 d" if pd.notna(v) and v == 0 else "N/A"))
 
         for cat in active_cats:
             col_name = f"{cat} %"
@@ -961,7 +975,14 @@ if not apts_df.empty and "prop_unit" in apts_df.columns and apts_df["prop_unit"]
             (u_top_cat_counts.iloc[0] / u_total * 100) if u_total > 0 else 0
         )
         u_res = u_df["ttl_days"].mean()
-        u_res_str = f"{u_res:.1f} days" if pd.notna(u_res) else "N/A"
+        if pd.isna(u_res):
+            u_res_str = "N/A"
+        elif u_res == 0:
+            u_res_str = "Same day (<1 day)"
+        elif u_res < 1:
+            u_res_str = f"{u_res*24:.0f} hours"
+        else:
+            u_res_str = f"{u_res:.1f} days"
 
         st.markdown(
             f"""
@@ -1106,7 +1127,7 @@ if not apts_df.empty and "prop_unit" in apts_df.columns and apts_df["prop_unit"]
 
         # ── Statistical Tests & Significance ─────────────────────────────────
         st.markdown("<hr style='margin:1rem 0; border-color:#e2e8f0;'>", unsafe_allow_html=True)
-        st.markdown("<div style='font-weight:700; color:#013494; margin-bottom:8px;'>🔬 Statistical Significance Analysis</div>", unsafe_allow_html=True)
+        st.markdown("<div style='font-weight:700; color:#013494; margin-bottom:8px;'>Statistical Significance Analysis</div>", unsafe_allow_html=True)
 
         col_sig1, col_sig2 = st.columns([1, 1])
 

@@ -10,9 +10,14 @@ pg = st.navigation(
     [
         st.Page(
             "pages/home.py",
-            title="Dashboard",
+            title="Operations Dashboard",
             icon=":material/dashboard:",
             default=True,
+        ),
+        st.Page(
+            "pages/financials.py",
+            title="Financials Dashboard",
+            icon=":material/payments:",
         ),
         st.Page(
             "pages/upload.py",
